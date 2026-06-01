@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NEON PINBALL</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+    
+    body {
+      font-family: 'Press Start 2P', sans-serif;
+      background: radial-gradient(circle at center, #1a0033, #000000);
+    }
+    
+    canvas {
+      border: 4px solid #00ffff;
+      box-shadow: 0 0 40px #00ffff,
+                  0 0 80px #ff00ff;
+      image-rendering: pixelated;
+    }
+    
+    .neon-text {
+      text-shadow: 0 0 10px #00ffff,
+                   0 0 20px #00ffff,
+                   0 0 40px #ff00ff;
+    }
+  </style>
+</head>
+<body class="min-h-screen flex items-center justify-center text-white">
+  <div class="text-center">
+    <h1 class="text-5xl font-bold neon-text mb-2 text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-pink-500">
+      NEON PINBALL
+    </h1>
+    <p class="text-cyan-300 mb-6">SPACE: 발사 | ← → : 플리퍼</p>
+
+    <div class="flex justify-center gap-8 mb-4 text-xl">
+      <div>SCORE: <span id="score" class="text-yellow-400">0</span></div>
+      <div>BALL: <span id="balls" class="text-pink-400">3</span></div>
+    </div>
+
+    <canvas id="game" width="500" height="650" class="bg-black rounded-2xl"></canvas>
+
+    <div class="mt-6 flex gap-4 justify-center">
+      <button onclick="startGame()" 
+              class="px-8 py-3 bg-gradient-to-r from-cyan-500 to-pink-500 rounded-xl font-bold hover:scale-105 transition">
+        NEW GAME
+      </button>
+      <button onclick="togglePause()" 
+              class="px-8 py-3 bg-gray-800 hover:bg-gray-700 rounded-xl font-bold transition">
+        PAUSE / RESUME
+      </button>
+    </div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    
+    let score = 0;
+    let balls = 3;
+    let isPaused = false;
+    let gameOver = false;
+
+    // 게임 객체
+    let ball = {
+      x: 450,
+      y: 550,
+      radius: 12,
+      vx: 0,
+      vy: 0,
+      speed: 8
+    };
+
+    let leftFlipper = { angle: 0, x: 180, y: 580 };
+    let rightFlipper = { angle: 0, x: 320, y: 580 };
+
+    let bumpers = [
+      {x: 150, y: 200, r: 35, points: 100},
+      {x: 250, y: 150, r: 35, points: 150},
+      {x: 350, y: 200, r: 35, points: 100},
+      {x: 200, y: 300, r: 30, points: 80},
+      {x: 300, y: 320, r: 30, points: 80}
+    ];
+
+    let walls = []; // 동적 충돌용
+
+    // 키 입력
+    let keys = {};
+    window.addEventListener('keydown', e => keys[e.key] = true);
+    window.addEventListener('keyup', e => keys[e.key] = false);
+
+    function drawBackground() {
+      ctx.fillStyle = '#0a0014';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      
+      // 네온 그리드
+      ctx.strokeStyle = 'rgba(0, 255, 255, 0.1)';
+      ctx.lineWidth = 2;
+      for (let x = 0; x < canvas.width; x += 40) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, canvas.height);
+        ctx.stroke();
+      }
+      for (let y = 0; y < canvas.height; y += 40) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(canvas.width, y);
+        ctx.stroke();
+      }
+    }
+
+    function drawBall() {
+      ctx.save();
+      ctx.shadowBlur = 30;
+      ctx.shadowColor = '#00ffff';
+      
+      ctx.beginPath();
+      ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
+      ctx.fillStyle = '#00ffff';
+      ctx.fill();
+      
+      // 하이라이트
+      ctx.beginPath();
+      ctx.arc(ball.x - 5, ball.y - 5, 5, 0, Math.PI * 2);
+      ctx.fillStyle = 'white';
+      ctx.fill();
+      ctx.restore();
+    }
+
+    function drawFlipper(flipper, isLeft) {
+      ctx.save();
+      ctx.translate(flipper.x, flipper.y);
+      ctx.rotate(flipper.angle * (isLeft ? 1 : -1));
+      
+      ctx.fillStyle = '#ff00ff';
+      ctx.shadowBlur = 25;
+      ctx.shadowColor = '#ff00ff';
+      
+      ctx.fillRect(-80, -12, 160, 24);
+      ctx.restore();
+    }
+
+    function drawBumpers() {
+      bumpers.forEach(b => {
+        ctx.shadowBlur = 40;
+        ctx.shadowColor = '#ffff00';
+        
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+        ctx.fillStyle = '#ffff00';
+        ctx.fill();
+        
+        ctx.fillStyle = '#000';
+        ctx.font = 'bold 16px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText('★', b.x, b.y + 6);
+      });
+    }
+
+    function updatePhysics() {
+      if (isPaused || gameOver) return;
+
+      // 중력
+      ball.vy += 0.35;
+      
+      // 이동
+      ball.x += ball.vx;
+      ball.y += ball.vy;
+
+      // 벽 충돌
+      if (ball.x - ball.radius < 30 || ball.x + ball.radius > canvas.width - 30) {
+        ball.vx *= -0.85;
+        ball.x = Math.max(30 + ball.radius, Math.min(canvas.width - 30 - ball.radius, ball.x));
+      }
+      if (ball.y - ball.radius < 30) {
+        ball.vy *= -0.85;
+      }
+
+      // 바닥
+      if (ball.y > canvas.height - 40) {
+        balls--;
+        document.getElementById('balls').textContent = balls;
+        
+        if (balls <= 0) {
+          gameOver = true;
+          alert(`GAME OVER! 최종 점수: ${score}`);
+        } else {
+          resetBall();
+        }
+      }
+
+      // 플리퍼 충돌
+      [leftFlipper, rightFlipper].forEach((flipper, i) => {
+        const isLeft = i === 0;
+        const distX = ball.x - flipper.x;
+        const distY = ball.y - flipper.y;
+        
+        if (Math.abs(distX) < 85 && Math.abs(distY) < 40) {
+          if (keys[isLeft ? 'ArrowLeft' : 'ArrowRight'] || keys[isLeft ? 'a' : 'd']) {
+            ball.vx += isLeft ? -12 : 12;
+            ball.vy = -18;
+            score += 20;
+          }
+        }
+      });
+
+      // 범퍼 충돌
+      bumpers.forEach(b => {
+        const dx = ball.x - b.x;
+        const dy = ball.y - b.y;
+        const distance = Math.sqrt(dx*dx + dy*dy);
+        
+        if (distance < ball.radius + b.r) {
+          const angle = Math.atan2(dy, dx);
+          ball.vx = Math.cos(angle) * 15;
+          ball.vy = Math.sin(angle) * 15 - 5;
+          score += b.points;
+          document.getElementById('score').textContent = score;
+        }
+      });
+    }
+
+    function resetBall() {
+      ball.x = 450;
+      ball.y = 550;
+      ball.vx = -3;
+      ball.vy = -8;
+    }
+
+    function gameLoop() {
+      drawBackground();
+      drawBumpers();
+      drawFlipper(leftFlipper, true);
+      drawFlipper(rightFlipper, false);
+      drawBall();
+
+      // 플리퍼 움직임
+      leftFlipper.angle = keys['ArrowLeft'] || keys['a'] ? 0.6 : 0.1;
+      rightFlipper.angle = keys['ArrowRight'] || keys['d'] ? 0.6 : 0.1;
+
+      updatePhysics();
+
+      // 점수 업데이트
+      document.getElementById('score').textContent = score;
+
+      requestAnimationFrame(gameLoop);
+    }
+
+    function startGame() {
+      score = 0;
+      balls = 3;
+      gameOver = false;
+      document.getElementById('score').textContent = '0';
+      document.getElementById('balls').textContent = '3';
+      resetBall();
+    }
+
+    function togglePause() {
+      isPaused = !isPaused;
+    }
+
+    // 시작
+    window.onload = () => {
+      startGame();
+      gameLoop();
+    };
+  </script>
+</body>
+</html>
